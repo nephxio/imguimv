@@ -23,6 +23,8 @@
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
 //  2025-XX-XX: Platform: Added support for multiple windows via the ImGuiPlatformIO interface.
+//  2025-02-21: [Docking] WM_SETTINGCHANGE's SPI_SETWORKAREA message also triggers a refresh of monitor list. (#8415)
+//  2025-02-18: Added ImGuiMouseCursor_Wait and ImGuiMouseCursor_Progress mouse cursor support.
 //  2024-11-21: [Docking] Fixed a crash when multiple processes are running with multi-viewports, caused by misusage of GetProp(). (#8162, #8069)
 //  2024-10-28: [Docking] Rely on property stored inside HWND to retrieve context/viewport, should facilitate attempt to use this for parallel contexts. (#8069)
 //  2024-09-16: [Docking] Inputs: fixed an issue where a viewport destroyed while clicking would hog mouse tracking and temporary lead to incorrect update of HoveredWindow. (#7971)
@@ -279,6 +281,8 @@ static bool ImGui_ImplWin32_UpdateMouseCursor(ImGuiIO& io, ImGuiMouseCursor imgu
         case ImGuiMouseCursor_ResizeNESW:   win32_cursor = IDC_SIZENESW; break;
         case ImGuiMouseCursor_ResizeNWSE:   win32_cursor = IDC_SIZENWSE; break;
         case ImGuiMouseCursor_Hand:         win32_cursor = IDC_HAND; break;
+        case ImGuiMouseCursor_Wait:         win32_cursor = IDC_WAIT; break;
+        case ImGuiMouseCursor_Progress:     win32_cursor = IDC_APPSTARTING; break;
         case ImGuiMouseCursor_NotAllowed:   win32_cursor = IDC_NO; break;
         }
         ::SetCursor(::LoadCursor(nullptr, win32_cursor));
@@ -865,6 +869,10 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandlerEx(HWND hwnd, UINT msg, WPA
     case WM_DISPLAYCHANGE:
         bd->WantUpdateMonitors = true;
         return 0;
+    case WM_SETTINGCHANGE:
+        if (wParam == SPI_SETWORKAREA)
+            bd->WantUpdateMonitors = true;
+        return 0;
     }
     return 0;
 }
@@ -1038,10 +1046,10 @@ void ImGui_ImplWin32_EnableAlphaCompositing(void* hwnd)
 // If you are new to dear imgui or creating a new binding for dear imgui, it is recommended that you completely ignore this section first..
 //--------------------------------------------------------------------------------------------------------
 
-// Helper structure we store in the void* RendererUserData field of each ImGuiViewport to easily retrieve our backend data.
+// Helper structure we store in the void* PlatformUserData field of each ImGuiViewport to easily retrieve our backend data.
 struct ImGui_ImplWin32_ViewportData
 {
-    HWND    Hwnd;
+    HWND    Hwnd;               // Stored in ImGuiViewport::PlatformHandle + PlatformHandleRaw
     HWND    HwndParent;
     bool    HwndOwned;
     DWORD   DwStyle;
@@ -1264,7 +1272,12 @@ static void ImGui_ImplWin32_SetWindowTitle(ImGuiViewport* viewport, const char* 
     ImVector<wchar_t> title_w;
     title_w.resize(n);
     ::MultiByteToWideChar(CP_UTF8, 0, title, -1, title_w.Data, n);
-    ::SetWindowTextW(vd->Hwnd, title_w.Data);
+
+    // Calling SetWindowTextW() in a project where UNICODE is not set doesn't work but there's a trick
+    // which is to pass it directly to the DefWindowProcW() handler.
+    // See: https://stackoverflow.com/questions/9410681/setwindowtextw-in-an-ansi-project
+    //::SetWindowTextW(vd->Hwnd, title_w.Data);
+    ::DefWindowProcW(vd->Hwnd, WM_SETTEXT, 0, (LPARAM)title_w.Data);
 }
 
 static void ImGui_ImplWin32_SetWindowAlpha(ImGuiViewport* viewport, float alpha)
@@ -1403,7 +1416,7 @@ static void ImGui_ImplWin32_InitMultiViewportSupport(bool platform_has_own_dc)
 
 static void ImGui_ImplWin32_ShutdownMultiViewportSupport()
 {
-    ::UnregisterClass(_T("ImGui Platform"), ::GetModuleHandle(nullptr));
+    ::UnregisterClassW(L"ImGui Platform", ::GetModuleHandle(nullptr));
     ImGui::DestroyPlatformWindows();
 }
 
